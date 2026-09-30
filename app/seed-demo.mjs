@@ -71,7 +71,6 @@ const STAGES = [
   { code: 'RC_DOCUMENT',        phase: 'A', required: true,  dwell: 28, retake: 0.30, issue: 0.24, kind: 'text' },
   { code: 'WINDSHIELD_INSIDE',  phase: 'A', required: false, dwell: 12, retake: 0.08, issue: 0.10, kind: 'view' },
   { code: 'INTERIOR_DASHBOARD', phase: 'A', required: true,  dwell: 16, retake: 0.18, issue: 0.16, kind: 'text' },
-  { code: 'VRN',                phase: 'A', required: false, dwell: 11, retake: 0.15, issue: 0.14, kind: 'text' },
   { code: 'CHASSIS_NUMBER',     phase: 'B', required: true,  dwell: 38, retake: 0.34, issue: 0.30, kind: 'text' },
   { code: 'ENGINE_BAY',         phase: 'B', required: false, dwell: 20, retake: 0.10, issue: 0.12, kind: 'view' },
   { code: 'FRONT_VIEW',         phase: 'B', required: true,  dwell: 13, retake: 0.14, issue: 0.16, kind: 'plate' },
@@ -88,7 +87,6 @@ const FIRST_CONDITIONAL = STAGES.findIndex(st => st.condition);
 const PROCESSORS = {
   RC_DOCUMENT: 'ocr_rc',
   INTERIOR_DASHBOARD: 'ocr_odometer',
-  VRN: 'ocr_plate',
   FRONT_VIEW: 'ocr_plate',
   REAR_VIEW: 'ocr_plate',
   CHASSIS_NUMBER: 'ocr_chassis',

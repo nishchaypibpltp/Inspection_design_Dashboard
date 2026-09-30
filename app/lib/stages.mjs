@@ -7,6 +7,7 @@ export const RETIRED_STAGES = Object.freeze([
   'REAR_RIGHT_DIAGONAL',
   'ODOMETER',
   'PREVIOUS_DAMAGE',
+  'VRN',
 ]);
 
 // Stages added to the capture flow that older sessions have no row for.

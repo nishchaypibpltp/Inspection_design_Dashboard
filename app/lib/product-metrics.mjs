@@ -39,6 +39,67 @@ export function buildJourneyFunnel(counts) {
   }));
 }
 
+// Whole journey, one row per step. Stage steps come in capture order; a conditional
+// stage (e.g. bi-fuel only) is measured against its eligible sessions, so it is kept
+// out of the step-to-step chain and never flagged as a drop.
+export function buildJourneySteps(journey, stages) {
+  const steps = [];
+  let prev = null;
+  const push = (phase, key, label, users, extra = {}) => {
+    const step = { phase, key, label, users, ...extra };
+    if (!step.conditional) {
+      step.pct_of_created = metricPercent(users, journey.created);
+      step.pct_from_previous = prev ? metricPercent(users, prev.users) : 100;
+      step.drop_users = prev ? prev.users - users : 0;
+      prev = step;
+    } else {
+      step.pct_of_eligible = metricPercent(users, step.eligible);
+    }
+    steps.push(step);
+  };
+  push('Setup', 'created', 'Sessions created', journey.created);
+  push('Setup', 'permission_granted', 'All permissions granted', journey.permission_granted);
+  push('Recording', 'started', 'Recording started', journey.started);
+  for (const s of stages) {
+    push('Recording', `stage:${s.stage}`, s.stage, s.reached,
+      s.conditional ? { conditional: true, condition_key: s.condition_key, eligible: s.eligible, stage: s.stage }
+        : { stage: s.stage });
+  }
+  push('Recording', 'recording_complete', 'Recording finished', journey.recording_complete);
+  push('Processing', 'completed', 'Photos extracted and checked', journey.completed,
+    { clean: journey.clean_completed, clean_pct: metricPercent(journey.clean_completed, journey.completed) });
+  push('Delivery', 'submitted', 'Sent to vendor', journey.submitted);
+  push('Delivery', 'approved', 'Approved by vendor', journey.approved);
+  // Only customer-driven steps; later steps wait on processing, review or the vendor.
+  const worst = steps.filter(s => !s.conditional && s.drop_users > 0 && ['Setup', 'Recording'].includes(s.phase))
+    .sort((a, b) => b.drop_users - a.drop_users)[0];
+  if (worst) worst.biggest_drop = true;
+  return steps;
+}
+
+export function platformOf(ua) {
+  if (!ua) return 'Unknown';
+  if (/iphone|ipad|ipod|ios/i.test(ua)) return 'iOS';
+  if (/android/i.test(ua)) return 'Android';
+  return 'Other';
+}
+
+// rows: one per distinct user-agent with its counts; summed per platform.
+export function buildPlatformBreakdown(rows) {
+  const by = {};
+  for (const r of rows) {
+    const p = (by[platformOf(r.ua)] ??= { platform: platformOf(r.ua), sessions: 0, permission_granted: 0, started: 0, completed: 0, clean_completed: 0 });
+    for (const k of ['sessions', 'permission_granted', 'started', 'completed', 'clean_completed']) p[k] += Number(r[k]);
+  }
+  return Object.values(by).map(p => ({
+    ...p,
+    permission_pct: metricPercent(p.permission_granted, p.sessions),
+    started_pct: metricPercent(p.started, p.sessions),
+    completed_pct: metricPercent(p.completed, p.sessions),
+    clean_pct: metricPercent(p.clean_completed, p.sessions),
+  })).sort((a, b) => b.sessions - a.sessions);
+}
+
 export const PRODUCT_METRIC_DEFINITIONS = {
   stage_conversion: {
     formula: 'users completing stage n ÷ users completing stage n−1',
@@ -96,6 +157,13 @@ export async function productMetrics(from, to) {
             AND ${activeStage('f.stage_type')}
         )
       ) AS clean_completed,
+      (SELECT count(DISTINCT e.session_id)::int
+         FROM inspection_audit_events e JOIN scoped s ON s.id = e.session_id
+        WHERE e.event_type = 'recording_complete') AS recording_complete,
+      (SELECT count(*)::int FROM inspection_submissions sub JOIN completed c ON c.id = sub.session_id
+        WHERE sub.status = 'DISPATCHED') AS submitted,
+      (SELECT count(*)::int FROM inspection_submissions sub JOIN completed c ON c.id = sub.session_id
+        WHERE sub.status = 'DISPATCHED' AND sub.vendor_remarks = 'APPROVED') AS approved,
       (SELECT count(*)::int FROM scoped
         WHERE vehicle_reg = 'MH12AB1234'
           OR customer_id ~* '^(dev-|smoke|e2e|cust-e2e|night-e2e|codex|tunnel|replay|refresh|test)'
@@ -110,6 +178,63 @@ export async function productMetrics(from, to) {
     ['clean_completed', 'Clean completion', journey.clean_completed],
   ];
   journey.funnel = buildJourneyFunnel(funnelCounts);
+
+  // A stage counts as reached when the recording carries a mark for it.
+  const stageReach = await q(`
+    WITH scoped AS (
+      SELECT * FROM inspection_sessions s ${where}
+    ), started AS (
+      SELECT DISTINCT e.session_id
+      FROM inspection_audit_events e JOIN scoped s ON s.id = e.session_id
+      WHERE e.event_type = 'recording_started'
+    ), stage_order AS (
+      SELECT st.stage_type AS stage, avg(st.sequence_number) AS ord,
+        bool_or(st.is_conditional) AS conditional, max(st.condition_key) AS condition_key
+      FROM inspection_stages st JOIN scoped s ON s.id = st.session_id
+      WHERE ${activeStage('st.stage_type')}
+      GROUP BY 1
+    ), marks AS (
+      SELECT DISTINCT v.session_id, a.e->>'stage_type' AS stage
+      FROM inspection_videos v JOIN started x ON x.session_id = v.session_id,
+        LATERAL jsonb_array_elements(
+          CASE WHEN jsonb_typeof(v.stage_timestamps) = 'array' THEN v.stage_timestamps ELSE '[]'::jsonb END
+        ) AS a(e)
+    )
+    SELECT o.stage, o.conditional, o.condition_key,
+      (SELECT count(*)::int FROM started x JOIN scoped s ON s.id = x.session_id
+        WHERE NOT o.conditional
+           OR (o.condition_key = 'BI_FUEL_ONLY' AND COALESCE((s.checklist_state->>'is_bi_fuel')::boolean, false))
+           OR (o.condition_key = 'HAS_PREVIOUS_POLICY' AND COALESCE((s.checklist_state->>'has_previous_policy')::boolean, false))
+      ) AS eligible,
+      (SELECT count(*)::int FROM marks m WHERE m.stage = o.stage) AS reached
+    FROM stage_order o
+    ORDER BY o.ord, o.stage
+  `, params);
+  journey.steps = buildJourneySteps(journey, stageReach);
+
+  const platformRows = await q(`
+    WITH scoped AS (
+      SELECT * FROM inspection_sessions s ${where}
+    ), started AS (
+      SELECT DISTINCT e.session_id
+      FROM inspection_audit_events e JOIN scoped s ON s.id = e.session_id
+      WHERE e.event_type = 'recording_started'
+    )
+    SELECT s.device_metadata->>'ua' AS ua,
+      count(*)::int AS sessions,
+      count(*) FILTER (WHERE COALESCE((s.permissions_state->>'camera_granted')::boolean, false)
+        AND COALESCE((s.permissions_state->>'microphone_granted')::boolean, false)
+        AND COALESCE((s.permissions_state->>'location_granted')::boolean, false))::int AS permission_granted,
+      count(x.session_id)::int AS started,
+      count(*) FILTER (WHERE s.status IN ('REVIEW_READY','SUBMITTED'))::int AS completed,
+      count(*) FILTER (WHERE s.status IN ('REVIEW_READY','SUBMITTED') AND NOT EXISTS (
+        SELECT 1 FROM inspection_findings f
+        WHERE f.session_id = s.id AND f.severity = 'BLOCKING' AND ${activeStage('f.stage_type')}
+      ))::int AS clean_completed
+    FROM scoped s LEFT JOIN started x ON x.session_id = s.id
+    GROUP BY 1
+  `, params);
+  const platforms = buildPlatformBreakdown(platformRows);
 
   const qcByStage = await q(`
     WITH scoped AS (
@@ -239,6 +364,7 @@ export async function productMetrics(from, to) {
   return {
     definitions: PRODUCT_METRIC_DEFINITIONS,
     journey,
+    platforms,
     qc_by_stage: qcByStage,
     qc_reasons: qcReasons,
     stage_timing: timing,
