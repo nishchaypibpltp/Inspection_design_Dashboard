@@ -88,7 +88,7 @@ function stackedBars(mount, { title, sub, days, series, visibleDays }) {
   const total = d => series.reduce((a, s) => a + (d.segs[s.key] || 0), 0);
   const max = Math.max(1, ...days.map(total));
   const plotH = H - padT - padB;
-  let zoomIdx = 0, scrollPos = null, bar = null;
+  let zoomIdx = 0, scrollPos = 0, bar = null;
   const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
   const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
   const dayLabel = day => {
@@ -171,8 +171,18 @@ function stackedBars(mount, { title, sub, days, series, visibleDays }) {
     scroller.className = 'hscroll';
     scroller.appendChild(svg);
     wrap.append(axis, scroller);
-    scroller.addEventListener('scroll', () => { hideTip(); scrollPos = scroller.scrollLeft; });
-    requestAnimationFrame(() => { scroller.scrollLeft = scrollPos ?? scroller.scrollWidth; });
+    // Position is kept as distance from the latest day so zoom and resize keep the same days in view.
+    let restored = false;
+    scroller.addEventListener('scroll', () => {
+      hideTip();
+      if (restored && scroller.isConnected) scrollPos = scroller.scrollWidth - scroller.clientWidth - scroller.scrollLeft;
+    });
+    const restore = () => {
+      if (!scroller.isConnected) return requestAnimationFrame(restore);
+      scroller.scrollLeft = scroller.scrollWidth - scroller.clientWidth - scrollPos;
+      requestAnimationFrame(() => { restored = true; });
+    };
+    requestAnimationFrame(restore);
     // Trackpad pinch arrives as ctrl+wheel; ⌘/Ctrl + scroll does the same with a mouse.
     let acc = 0;
     wrap.addEventListener('wheel', ev => {
