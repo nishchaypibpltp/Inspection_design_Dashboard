@@ -81,22 +81,27 @@ function chartCard(mount, { title, sub, buildSvg, tableHeaders, tableRows, legen
 // Stacked daily columns. days: [{day, segs: {key: n}}]; series: [{key,label,color}]
 // With visibleDays, only that many columns fit the frame; the rest scroll horizontally
 // behind a fixed y-axis, starting at the latest day.
-// Vertical zoom lowers the y-axis ceiling; columns taller than it are cut with a ▲ marker.
+// Vertical zoom stretches columns taller inside the same frame; the frame then scrolls
+// vertically too. The y-axis (left) and day labels (bottom) stay pinned while scrolling.
 const ZOOM_LEVELS = [1, 1.5, 2, 3, 4, 6];
 function stackedBars(mount, { title, sub, days, series, visibleDays }) {
-  const H = 280, padL = 40, padB = 26, padT = 22;
+  const H = 290, padL = 40, padB = 42, padT = 22;
   const total = d => series.reduce((a, s) => a + (d.segs[s.key] || 0), 0);
   const max = Math.max(1, ...days.map(total));
   const plotH = H - padT - padB;
-  let zoomIdx = 0, scrollPos = 0, bar = null;
+  // Scroll position is kept as distance from the latest day / the baseline, so zoom and
+  // resize keep the same part of the chart in view.
+  let zoomIdx = 0, fromRight = 0, fromBottom = 0, bar = null;
   const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
   const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
   const dayLabel = day => {
     const t = new Date(`${day}T00:00:00Z`);
     return `${WEEKDAYS[t.getUTCDay()]} ${t.getUTCDate()} ${MONTHS[t.getUTCMonth()]}`;
   };
+  const sized = (w, h) => { const s = svgEl(w, h); s.setAttribute('width', w); s.setAttribute('height', h); return s; };
 
   const buildSvg = width => {
+    const zoom = ZOOM_LEVELS[zoomIdx];
     const W = Math.max(320, Math.round(width));
     const plotW = W - padL - 8;
     const scrolls = visibleDays && days.length > visibleDays;
@@ -105,52 +110,54 @@ function stackedBars(mount, { title, sub, days, series, visibleDays }) {
     const bw = Math.min(scrolls ? 36 : 24, band * 0.6);
     // A "Tue 29 Sep" label needs ~70px; label every n-th column, anchored on the latest day.
     const labelEvery = Math.max(1, Math.ceil(70 / band));
-    const ticks = niceTicks(max / ZOOM_LEVELS[zoomIdx]);
+    const fullH = plotH * zoom;
+    const ticks = niceTicks(max, Math.round(4 * zoom));   // denser gridlines as the scale stretches
     const yMax = ticks[ticks.length - 1];
+    const barsH = padT + fullH;
+    const yOf = v => padT + fullH - (v / yMax) * fullH;
 
-    const axis = svgEl(padL, H);
-    axis.setAttribute('width', padL);
-    axis.style.flex = '0 0 auto';
-    const svg = svgEl(innerW, H);
-    svg.setAttribute('width', innerW);
+    const axis = sized(padL, barsH);
+    axis.classList.add('y-axis');
+    const svg = sized(innerW, barsH);
     for (const t of ticks) {
-      const y = padT + plotH - (t / yMax) * plotH;
+      const y = yOf(t);
       svg.appendChild(el('line', { x1: 0, x2: innerW, y1: y, y2: y, stroke: 'var(--grid)', 'stroke-width': 1 }));
       const lbl = el('text', { x: padL - 6, y: y + 3, 'text-anchor': 'end' });
       lbl.textContent = t.toLocaleString(); axis.appendChild(lbl);
     }
+    const xl = sized(innerW, padB);
+    xl.classList.add('x-axis');
+    // Per-day marker in the pinned label row: ▼ when the whole column is below the
+    // visible frame, ▲ when it continues above it. Updated on scroll.
+    const markers = [];
     days.forEach((d, i) => {
+      if (total(d)) {
+        const mk = el('text', { x: i * band + band / 2, y: 13, 'text-anchor': 'middle', class: 'offview' });
+        xl.appendChild(mk);
+        markers.push({ mk, top: yOf(total(d)), n: total(d) });
+      }
       const cx = i * band + (band - bw) / 2;
-      let yCur = padT + plotH;
+      let yCur = yOf(0);
       let firstDrawn = false;
-      const clipped = total(d) > yMax;
+      const top = [...series].reverse().find(ss => d.segs[ss.key]);
       for (const s of series) {
         const v = d.segs[s.key] || 0;
-        if (!v || yCur <= padT) continue;
+        if (!v) continue;
         const gap = firstDrawn ? 2 : 0;         // 2px surface gap between touching segments
-        const yTop = Math.max(yCur - (v / yMax) * plotH, padT);
+        const yTop = yCur - (v / yMax) * fullH;
         const segH = Math.max(yCur - yTop - gap, 0.5);
-        const isTop = !clipped && s === [...series].reverse().find(ss => d.segs[ss.key]);
-        const path = isTop ? barPath(cx, yTop, bw, segH) : `M${cx},${yTop} h${bw} v${segH} h${-bw} z`;
+        const path = s === top ? barPath(cx, yTop, bw, segH) : `M${cx},${yTop} h${bw} v${segH} h${-bw} z`;
         svg.appendChild(el('path', { d: path, fill: s.color }));
         yCur = yTop;
         firstDrawn = true;
       }
-      if (clipped) {
-        // zigzag break across the cut column
-        svg.appendChild(el('path', {
-          d: `M${cx - 2},${padT + 7} l${(bw + 4) / 4},-4 l${(bw + 4) / 4},4 l${(bw + 4) / 4},-4 l${(bw + 4) / 4},4`,
-          fill: 'none', stroke: 'var(--surface)', 'stroke-width': 2.5,
-        }));
-      }
-      if ((scrolls || clipped) && total(d)) {
+      if ((scrolls || zoom > 1) && total(d)) {
         const tl = el('text', { x: cx + bw / 2, y: yCur - 5, 'text-anchor': 'middle' });
-        tl.style.fill = clipped ? 'var(--ink)' : 'var(--ink-2)';
-        if (clipped) tl.style.fontWeight = '650';
-        tl.textContent = clipped ? `▲ ${total(d)}` : total(d); svg.appendChild(tl);
+        tl.style.fill = 'var(--ink-2)';
+        tl.textContent = total(d); svg.appendChild(tl);
       }
       // whole-column hit target — one tooltip, every series
-      const hit = el('rect', { x: i * band, y: 0, width: band, height: H, fill: 'transparent' });
+      const hit = el('rect', { x: i * band, y: 0, width: band, height: barsH, fill: 'transparent' });
       hit.addEventListener('pointermove', ev => {
         const rows = series.filter(s => d.segs[s.key])
           .map(s => `<div class="k"><span class="lk" style="background:${s.color}"></span><span class="v">${d.segs[s.key]}</span>&nbsp;${esc(s.label)}</div>`).join('');
@@ -159,33 +166,54 @@ function stackedBars(mount, { title, sub, days, series, visibleDays }) {
       hit.addEventListener('pointerleave', hideTip);
       svg.appendChild(hit);
       if ((days.length - 1 - i) % labelEvery === 0) {
-        const dl = el('text', { x: i * band + band / 2, y: H - 8, 'text-anchor': 'middle' });
-        dl.textContent = scrolls ? dayLabel(d.day) : d.day.slice(5); svg.appendChild(dl);
+        const dl = el('text', { x: i * band + band / 2, y: padB - 7, 'text-anchor': 'middle' });
+        dl.textContent = scrolls ? dayLabel(d.day) : d.day.slice(5); xl.appendChild(dl);
       }
     });
-    svg.appendChild(el('line', { x1: 0, x2: innerW, y1: padT + plotH, y2: padT + plotH, stroke: 'var(--baseline)', 'stroke-width': 1 }));
+    svg.appendChild(el('line', { x1: 0, x2: innerW, y1: yOf(0), y2: yOf(0), stroke: 'var(--baseline)', 'stroke-width': 1 }));
 
-    const wrap = document.createElement('div');
-    wrap.className = 'hscroll-chart';
+    const corner = document.createElement('div');
+    corner.className = 'corner';
+    const grid = document.createElement('div');
+    grid.className = 'chart-grid';
+    grid.style.gridTemplateColumns = `${padL}px ${innerW}px`;
+    grid.append(axis, svg, corner, xl);
     const scroller = document.createElement('div');
-    scroller.className = 'hscroll';
-    scroller.appendChild(svg);
-    wrap.append(axis, scroller);
-    // Position is kept as distance from the latest day so zoom and resize keep the same days in view.
-    let restored = false;
+    scroller.className = 'chart-scroll';
+    scroller.style.maxHeight = `${H + 10}px`;   // frame + room for the horizontal scrollbar
+    scroller.appendChild(grid);
+
+    let restored = false, pending = false;
+    const updateMarkers = () => {
+      pending = false;
+      const visTop = scroller.scrollTop, visBottom = scroller.scrollTop + scroller.clientHeight - padB;
+      let below = 0;
+      for (const m of markers) {
+        const state = m.top >= visBottom - 2 ? 'below' : m.top < visTop ? 'above' : '';
+        if (state === 'below') below++;
+        m.mk.textContent = state === 'below' ? `▼ ${m.n}` : state === 'above' ? `▲ ${m.n}` : '';
+        m.mk.setAttribute('class', `offview ${state}`);
+      }
+      if (bar) bar.querySelector('.to-base').hidden = !below;
+    };
     scroller.addEventListener('scroll', () => {
       hideTip();
-      if (restored && scroller.isConnected) scrollPos = scroller.scrollWidth - scroller.clientWidth - scroller.scrollLeft;
-    });
+      if (!pending) { pending = true; requestAnimationFrame(updateMarkers); }
+      if (!restored || !scroller.isConnected) return;
+      fromRight = scroller.scrollWidth - scroller.clientWidth - scroller.scrollLeft;
+      fromBottom = scroller.scrollHeight - scroller.clientHeight - scroller.scrollTop;
+    }, { passive: true });
     const restore = () => {
       if (!scroller.isConnected) return requestAnimationFrame(restore);
-      scroller.scrollLeft = scroller.scrollWidth - scroller.clientWidth - scrollPos;
+      scroller.scrollLeft = scroller.scrollWidth - scroller.clientWidth - fromRight;
+      scroller.scrollTop = scroller.scrollHeight - scroller.clientHeight - fromBottom;
+      updateMarkers();
       requestAnimationFrame(() => { restored = true; });
     };
     requestAnimationFrame(restore);
     // Trackpad pinch arrives as ctrl+wheel; ⌘/Ctrl + scroll does the same with a mouse.
     let acc = 0;
-    wrap.addEventListener('wheel', ev => {
+    scroller.addEventListener('wheel', ev => {
       if (!ev.ctrlKey && !ev.metaKey) return;
       ev.preventDefault();
       acc += ev.deltaY;
@@ -194,7 +222,7 @@ function stackedBars(mount, { title, sub, days, series, visibleDays }) {
       acc = 0;
     }, { passive: false });
     updateZoomUi();
-    return wrap;
+    return scroller;
   };
   const card = chartCard(mount, {
     title, sub, buildSvg,
@@ -205,15 +233,21 @@ function stackedBars(mount, { title, sub, days, series, visibleDays }) {
 
   bar = document.createElement('div');
   bar.className = 'chart-zoom';
-  bar.innerHTML = `<span class="hint">Pinch or ⌘/Ctrl + scroll over the chart to zoom</span>
+  bar.innerHTML = `<span class="hint"></span>
     <button data-z="-1" aria-label="Zoom out">−</button><span class="level"></span>
     <button data-z="1" aria-label="Zoom in">+</button><button data-z="0" class="reset">Reset</button>`;
+  bar.querySelector('.hint').insertAdjacentHTML('afterend', '<button class="to-base" hidden>▼ Back to baseline</button>');
   card.querySelector('.body').before(bar);
-  bar.querySelectorAll('button').forEach(b => b.onclick = () =>
+  bar.querySelectorAll('button[data-z]').forEach(b => b.onclick = () =>
     setZoom(b.dataset.z === '0' ? 0 : zoomIdx + Number(b.dataset.z)));
+  bar.querySelector('.to-base').onclick = () => {
+    const sc = card.querySelector('.chart-scroll');
+    sc?.scrollTo({ top: sc.scrollHeight, behavior: 'smooth' });
+  };
   function setZoom(i) {
     i = Math.max(0, Math.min(ZOOM_LEVELS.length - 1, i));
     if (i === zoomIdx) return;
+    fromBottom *= ZOOM_LEVELS[i] / ZOOM_LEVELS[zoomIdx];
     zoomIdx = i;
     hideTip();
     card.rerender();
@@ -221,6 +255,9 @@ function stackedBars(mount, { title, sub, days, series, visibleDays }) {
   function updateZoomUi() {
     if (!bar?.isConnected) return;
     bar.querySelector('.level').textContent = `${ZOOM_LEVELS[zoomIdx]}×`;
+    bar.querySelector('.hint').textContent = zoomIdx
+      ? 'Scroll inside the chart to move up or down · ▼ / ▲ under a day = its bar is below / above the view'
+      : 'Pinch or ⌘/Ctrl + scroll over the chart to zoom';
     bar.querySelector('[data-z="-1"]').disabled = zoomIdx === 0;
     bar.querySelector('[data-z="1"]').disabled = zoomIdx === ZOOM_LEVELS.length - 1;
     bar.querySelector('.reset').disabled = zoomIdx === 0;

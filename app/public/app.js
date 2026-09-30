@@ -184,6 +184,12 @@ const METRIC_INFO = {
     what: 'Confirms completed inspections actually reach the insurer\'s vendor.',
     formula: 'count(inspection_submissions)', source: 'inspection_submissions',
     read: 'Should track Captures completed once Mode-B is live.' },
+  approved: { name: 'Approved by insurer', status: 'Live',
+    what: 'Submitted inspections that passed the vendor\'s review, so the policy can proceed.',
+    formula: 'submissions with status DISPATCHED and vendor_remarks = APPROVED · % = approved ÷ dispatched submissions',
+    source: 'inspection_submissions.vendor_remarks',
+    read: 'The rest of the dispatched submissions are rejected, on hold for photos, or still in review.',
+    caveat: 'Not in the metrics sheet yet. Cases still in review count against the percentage until a verdict arrives.' },
   9: { name: 'Daily inspection sessions', status: 'Live',
     what: 'Daily volume and what happened to each day\'s cohort.',
     formula: 'sessions per IST created day, split by pipeline state', source: 'inspection_sessions',
@@ -300,7 +306,8 @@ function severityBadge(sev) { return `<span class="sev sev-${escf(String(sev).to
 
 // Hover/focus ⓘ. ref = sheet number from METRIC_INFO or an inline definition object.
 function metricExplainer(card, ref) {
-  const m = typeof ref === 'number' ? { n: ref, ...METRIC_INFO[ref] } : ref;
+  const m = typeof ref === 'number' ? { n: ref, ...METRIC_INFO[ref] }
+    : typeof ref === 'string' ? METRIC_INFO[ref] : ref;
   const wrap = document.createElement('span');
   wrap.className = 'metric-info';
   wrap.tabIndex = 0;
@@ -369,6 +376,8 @@ async function viewOverview() {
     [6, 'Finished on day one', day1Pct === null ? '—' : day1Pct + '%', 'of completed captures'],
     [7, 'Retakes', `${s.retake_photos}`, `retake photos · ${s.stages_retried} stages retried`],
     [8, 'Submitted to WIMWIsure', s.submissions, s.submissions ? 'sent to the vendor' : 'none yet · Mode-B not live'],
+    ['approved', 'Approved by insurer', s.vendor_approved,
+      s.submissions_dispatched ? `${pct(100 * s.vendor_approved / s.submissions_dispatched)} of ${s.submissions_dispatched} sent · ${s.vendor_rejected} rejected` : 'no verdicts yet'],
   ];
   tiles.innerHTML = tileDefs.map(([, l, v, n]) => `<div class="tile"><div class="label">${l}</div><div class="value">${v}</div><div class="note">${n}</div></div>`).join('');
   body.appendChild(tiles);

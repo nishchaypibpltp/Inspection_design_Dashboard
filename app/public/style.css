@@ -80,7 +80,7 @@ main { max-width: 1280px; margin: 0 auto; padding: 20px 24px 60px; }
 .alert ul { margin: 6px 0 0; padding-left: 18px; color: var(--ink-2); font-size: 13px; }
 
 /* tiles */
-.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-bottom: 18px; }
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(135px, 1fr)); gap: 12px; margin-bottom: 18px; }
 .tile { background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
   padding: 14px 44px 14px 16px; position: relative; }
 .tile .label { color: var(--ink-2); font-size: 12.5px; }
@@ -107,11 +107,21 @@ main { max-width: 1280px; margin: 0 auto; padding: 20px 24px 60px; }
 .chart-zoom button.reset { font-size: 11.5px; color: var(--ink-2); }
 .chart-zoom button:disabled { opacity: .4; cursor: default; }
 .chart-zoom .level { min-width: 30px; text-align: center; font-variant-numeric: tabular-nums; font-weight: 600; }
-.hscroll-chart { display: flex; }
-.hscroll { flex: 1 1 auto; overflow-x: auto; padding-bottom: 6px; scrollbar-color: var(--baseline) transparent; }
-.hscroll svg { display: block; }
-.hscroll::-webkit-scrollbar { height: 8px; }
-.hscroll::-webkit-scrollbar-thumb { background: var(--baseline); border-radius: 4px; }
+.chart-scroll { overflow: auto; scrollbar-color: var(--baseline) transparent; }
+.chart-scroll::-webkit-scrollbar { width: 8px; height: 8px; }
+.chart-scroll::-webkit-scrollbar-thumb { background: var(--baseline); border-radius: 4px; }
+.chart-scroll::-webkit-scrollbar-corner { background: transparent; }
+.chart-grid { display: grid; width: max-content; }
+.chart-grid svg { display: block; }
+/* pinned axes: y-axis on the left, day labels at the bottom, both opaque so bars pass behind */
+.chart-grid .y-axis { position: sticky; left: 0; z-index: 1; background: var(--surface); }
+.chart-grid .x-axis { position: sticky; bottom: 0; z-index: 1; background: var(--surface); }
+.chart-grid text.offview { font-size: 10.5px; font-weight: 650; }
+.chart-grid text.offview.below { fill: var(--serious); }
+.chart-grid text.offview.above { fill: var(--s1); }
+.chart-zoom .to-base { color: var(--serious); border-color: color-mix(in srgb, var(--serious) 50%, transparent); font-size: 11.5px; }
+.chart-zoom .to-base[hidden] { display: none; }
+.chart-grid .corner { position: sticky; left: 0; bottom: 0; z-index: 2; background: var(--surface); }
 .legend .key { display: inline-flex; align-items: center; gap: 6px; }
 .legend .sw { width: 10px; height: 10px; border-radius: 3px; display: inline-block; }
 

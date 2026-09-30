@@ -45,7 +45,11 @@ export async function summary(from, to) {
         WHERE v.upload_status = 'COMPLETE') AS videos_complete,
       (SELECT count(*)::int FROM inspection_submissions sub JOIN scoped s2 ON s2.id = sub.session_id) AS submissions,
       (SELECT count(*)::int FROM inspection_submissions sub JOIN scoped s2 ON s2.id = sub.session_id
-        WHERE sub.vendor_remarks = 'REJECTED') AS vendor_rejected`, params);
+        WHERE sub.vendor_remarks = 'REJECTED') AS vendor_rejected,
+      (SELECT count(*)::int FROM inspection_submissions sub JOIN scoped s2 ON s2.id = sub.session_id
+        WHERE sub.status = 'DISPATCHED') AS submissions_dispatched,
+      (SELECT count(*)::int FROM inspection_submissions sub JOIN scoped s2 ON s2.id = sub.session_id
+        WHERE sub.status = 'DISPATCHED' AND sub.vendor_remarks = 'APPROVED') AS vendor_approved`, params);
 
   // Technical failures — the PM's rule: any occurrence is a rollback trigger,
   // listed individually, never trended.
